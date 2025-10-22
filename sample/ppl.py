@@ -45,7 +45,6 @@ def load_dataset(
                     tokens = tokens[:max_length]
                 sequences.append(tokens)
 
-    print(f"Loaded {len(sequences)} sequences from {dataset_path}")
     return sequences
 
 
@@ -159,7 +158,7 @@ def main():
         print("Failed to load dataset or dataset is empty")
         return
 
-    print(f"Loaded {len(sentences)} sequences")
+    print(f"Loaded {len(sentences)} sequences from {args.dataset_path}")
     print(f"Average sequence length: {np.mean([len(s) for s in sentences]):.1f}")
 
     # Evaluate perplexity in batches
@@ -188,7 +187,7 @@ def main():
 
     # Compute statistics
     print("\nComputing statistics...")
-    stats = compute_statistics(results)
+    stats = compute_statistics(all_results)
 
     # Print results
     print("\n" + "=" * 60)
