@@ -77,6 +77,11 @@ class Sequence:
         self.block_log_probs = []         # Log probs for current block only
         self.block_unmask_positions = []  # Unmask order for current block
 
+        # Store eval metadata separately (not conflicting with properties)
+        self.eval_num_blocks = 0  # Changed from num_blocks
+        self.eval_original_sentence = None  # Store original sentence
+        self.eval_original_index = None  # Store original index
+
     def set_full_oracle_sentence(self, oracle_sentence: list[int]):
         """Set complete sentence for multi-block PPL evaluation"""
         assert self.eval_mode, "Can only set oracle in eval mode"
