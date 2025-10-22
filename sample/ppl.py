@@ -8,7 +8,7 @@ Usage:
 import argparse
 from typing import List, Dict
 import numpy as np
-from datasets import load_dataset
+import datasets
 from jetengine_ext import LLM
 
 
@@ -29,7 +29,7 @@ def load_dataset(
     """
     sequences = []
 
-    dataset = load_dataset("json", data_files=dataset_path, split="train")
+    dataset = datasets.load_dataset("json", data_files=dataset_path, split="train")
 
     for i, example in enumerate(dataset):
         if max_samples and i >= max_samples:
