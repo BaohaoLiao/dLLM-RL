@@ -488,7 +488,7 @@ class LLMEngine:
                 # Store results
                 original_idx = seq.eval_original_index
                 results_dict[original_idx] = {
-                    'sentence': original_sentence,
+                    'tokens': original_sentence,
                     'perplexity': ppl,
                     'nll': nll,
                     'unmask_order': valid_unmask_order,
@@ -585,7 +585,7 @@ class LLMEngine:
                     block_ppls.append(np.exp(block_nll))
             
             results.append({
-                'sentence': sentence,
+                'tokens': sentence,
                 'perplexity': ppl,
                 'nll': nll,
                 'unmask_order': valid_unmask_order,
