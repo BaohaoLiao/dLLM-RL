@@ -11,6 +11,7 @@ from flashinfer.logits_processor import LogitsPipe, Temperature, Softmax, TopP, 
 
 
 class Scheduler:
+
     def __init__(self, config: Config):
         self.max_num_seqs = config.max_num_seqs
         self.max_num_batched_tokens = config.max_num_batched_tokens
@@ -29,7 +30,6 @@ class Scheduler:
                         Softmax(),          # Convert logits to probabilities
                         TopP(),             # Apply top-p filtering
                         ])
-        self.recently_finished = {}  # seq_id -> Sequence (before deallocation)
 
     def add(self, seq: Sequence):
         self.running.append(seq)
@@ -253,17 +253,6 @@ class Scheduler:
                 
         # Filter out finished sequences from the running list
         finished_seqs = [seq for seq in self.running if seq.is_finished]
-
-        # Store finished sequences temporarily
-        for seq in finished_seqs:
-            self.recently_finished[seq.seq_id] = seq
-
         self.running = [seq for seq in self.running if not seq.is_finished]
         for seq in finished_seqs:
             self.block_manager.deallocate(seq)
-
-    def get_and_clear_finished(self) -> dict:
-        """Get recently finished sequences and clear the cache"""
-        finished = self.recently_finished.copy()
-        self.recently_finished.clear()
-        return finished
