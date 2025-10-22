@@ -5,6 +5,7 @@ Usage:
     python ppl.py --model_name_or_path /path/to/model --dataset_path test.json --block_length 4
 """
 
+import json
 import argparse
 from typing import List, Dict
 import numpy as np
@@ -110,6 +111,8 @@ def main():
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size for evaluation"
     )
+    parser.add_argument('--output_file', type=str, default='ppl_results.json',
+                        help='Output file for results')
 
     args = parser.parse_args()
 
@@ -190,6 +193,16 @@ def main():
     print(f"Total Sequences: {stats['total_sequences']}")
     print(f"Total Tokens: {stats['total_tokens']}")
     print("=" * 60)
+
+    # Save results
+    output_data = {
+        'args': vars(args),
+        'statistics': stats,
+    }
+    with open(args.output_file, 'w') as f:
+        json.dump(output_data, f, indent=2)
+    
+    print(f"\nResults saved to {args.output_file}")
 
 
 if __name__ == "__main__":
