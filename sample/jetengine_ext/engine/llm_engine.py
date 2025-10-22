@@ -434,7 +434,7 @@ class LLMEngine:
 
             results.append(
                 {
-                    "sentence": sentence,
+                    "tokens": sentence,
                     "perplexity": ppl,
                     "nll": nll,
                     "unmask_order": valid_unmask_order,
