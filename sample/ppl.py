@@ -135,6 +135,7 @@ def main():
         model=args.model_name_or_path,
         tensor_parallel_size=args.tensor_parallel_size,
         mask_token_id=mask_token_id,
+        block_length=args.block_length,
     )
     print(f"Model loaded. Mask token ID: {llm.config.mask_token_id}")
 
