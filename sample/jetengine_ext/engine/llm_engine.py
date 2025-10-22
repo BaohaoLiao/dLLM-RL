@@ -387,6 +387,10 @@ class LLMEngine:
         """
         Evaluate perplexity with parallel processing of multiple sentences.
         """
+        print(f"Evaluating {len(sentences)} sentences with block_length={block_length}")
+        for i, sent in enumerate(sentences[:3]):  # Show first 3
+            print(f"  Sentence {i}: length={len(sent)}, tokens={sent[:10]}...")
+
         total = len(sentences)
         
         if max_active is None:
@@ -404,6 +408,8 @@ class LLMEngine:
         def create_eval_sequence(sentence: list[int], sent_idx: int):
             num_blocks = (len(sentence) + block_length - 1) // block_length
             padded_length = num_blocks * block_length
+
+            print(f"Creating eval seq {sent_idx}: orig_len={len(sentence)}, num_blocks={num_blocks}, padded_len={padded_length}")
             
             if len(sentence) < padded_length:
                 sentence_padded = sentence + [self.tokenizer.pad_token_id] * (padded_length - len(sentence))
@@ -510,7 +516,6 @@ class LLMEngine:
         results = [results_dict[i] for i in range(total)]
         return results
 
-
     def _evaluate_perplexity_sequential(
         self,
         sentences: list[list[int]],
@@ -601,4 +606,3 @@ class LLMEngine:
             pbar.close()
         
         return results
-

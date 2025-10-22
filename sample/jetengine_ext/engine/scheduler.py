@@ -73,26 +73,20 @@ class Scheduler:
         
         elif run_type == RunType.DENOISE:
             start_idx = 0
+            
+            # Prepare sampling
             if self.consistent_sampling_params:
                 if seqs[0].top_k > 0:
-                    probs = self.sample_pipe(logits, temperature=seqs[0].temperature, top_k=seqs[0].top_k, top_p=seqs[0].top_p) 
+                    probs = self.sample_pipe(logits, temperature=seqs[0].temperature, 
+                                            top_k=seqs[0].top_k, top_p=seqs[0].top_p) 
                 else:
-                    probs = self.sample_pipe_topk0(logits, temperature=seqs[0].temperature, top_p=seqs[0].top_p)
+                    probs = self.sample_pipe_topk0(logits, temperature=seqs[0].temperature, 
+                                                top_p=seqs[0].top_p)
+            
             for seq in seqs:
-                # Extract the part of the tensors relevant to this sequence
                 if seq.status == SequenceStatus.DENOISING:
                     block_len = seq.block_length
-                    if not self.consistent_sampling_params:
-                        if seq.top_k > 0:
-                            probs = self.sample_pipe(logits[start_idx : start_idx + block_len], temperature=seq.temperature, top_k=seq.top_k, top_p=seq.top_p)
-                        else:
-                            probs = self.sample_pipe_topk0(logits[start_idx : start_idx + block_len], temperature=seq.temperature, top_p=seq.top_p)
-                        seq_x0 = torch.multinomial(probs, num_samples=1).squeeze(-1) 
-                        seq_x0_p = torch.gather(probs, -1, seq_x0.unsqueeze(-1)).squeeze(-1)    
-                    else:
-                        seq_x0 = torch.multinomial(probs[start_idx : start_idx + block_len], num_samples=1).squeeze(-1) 
-                        seq_x0_p = torch.gather(probs[start_idx : start_idx + block_len], -1, seq_x0.unsqueeze(-1)).squeeze(-1)
-
+                    
                     # ========== PPL EVALUATION MODE ==========
                     if seq.eval_mode and seq.full_oracle_sentence is not None:
                         # Get oracle for CURRENT block
@@ -101,13 +95,41 @@ class Scheduler:
                             # Beyond sentence length, treat as normal generation
                             seq.eval_mode = False
                         else:
+                            # Compute probs for this sequence if not already done
+                            if not self.consistent_sampling_params:
+                                if seq.top_k > 0:
+                                    seq_probs = self.sample_pipe(
+                                        logits[start_idx : start_idx + block_len], 
+                                        temperature=seq.temperature, 
+                                        top_k=seq.top_k, 
+                                        top_p=seq.top_p
+                                    ) 
+                                else:
+                                    seq_probs = self.sample_pipe_topk0(
+                                        logits[start_idx : start_idx + block_len], 
+                                        temperature=seq.temperature, 
+                                        top_p=seq.top_p
+                                    )
+                            else:
+                                # Use pre-computed probs
+                                seq_probs = probs[start_idx : start_idx + block_len]
+                            
                             oracle_block_tensor = torch.tensor(oracle_block, device=logits.device)
+                            
+                            # Safety check: ensure dimensions match
+                            if seq_probs.shape[0] != len(oracle_block):
+                                print(f"Warning: probs shape {seq_probs.shape} doesn't match oracle block length {len(oracle_block)}")
+                                print(f"start_idx={start_idx}, block_len={block_len}, logits.shape={logits.shape}")
+                                print(f"seq.intermediate_block_tokens={seq.intermediate_block_tokens}")
+                                seq.eval_mode = False
+                                start_idx += block_len
+                                continue
                             
                             # Get probabilities for oracle tokens
                             oracle_probs = torch.gather(
-                                probs[start_idx : start_idx + block_len], 
-                                -1, 
-                                oracle_block_tensor.unsqueeze(-1)
+                                seq_probs, 
+                                dim=1,
+                                index=oracle_block_tensor.unsqueeze(-1)
                             ).squeeze(-1)
                             
                             # Find masked positions in current block
@@ -118,12 +140,26 @@ class Scheduler:
                             masked_oracle_probs = torch.where(
                                 mask_index, 
                                 oracle_probs, 
-                                torch.tensor(-np.inf, device=logits.device)
+                                torch.tensor(-np.inf, device=logits.device, dtype=oracle_probs.dtype)
                             )
+                            
+                            # Check if there are any masked positions
+                            if not mask_index.any():
+                                print(f"Warning: No masked positions in block")
+                                seq.status = SequenceStatus.SAVING
+                                start_idx += block_len
+                                continue
                             
                             # For low_confidence_static: select highest probability
                             best_pos = torch.argmax(masked_oracle_probs).item()
                             best_prob = oracle_probs[best_pos]
+                            
+                            # Check for valid probability
+                            if best_prob <= 0 or torch.isnan(best_prob) or torch.isinf(best_prob):
+                                print(f"Warning: Invalid probability {best_prob} at position {best_pos}")
+                                seq.eval_mode = False
+                                start_idx += block_len
+                                continue
                             
                             # Record log probability for THIS BLOCK
                             seq.block_log_probs.append(torch.log(best_prob).item())
@@ -147,6 +183,21 @@ class Scheduler:
                             continue
                     # ========== END PPL EVALUATION MODE ==========
                     
+                    # Normal generation mode (sample predictions)
+                    if not self.consistent_sampling_params:
+                        if seq.top_k > 0:
+                            probs_seq = self.sample_pipe(logits[start_idx : start_idx + block_len], 
+                                                    temperature=seq.temperature, top_k=seq.top_k, top_p=seq.top_p) 
+                        else:
+                            probs_seq = self.sample_pipe_topk0(logits[start_idx : start_idx + block_len], 
+                                                        temperature=seq.temperature, top_p=seq.top_p)
+                        seq_x0 = torch.multinomial(probs_seq, num_samples=1).squeeze(-1) 
+                        seq_x0_p = torch.gather(probs_seq, -1, seq_x0.unsqueeze(-1)).squeeze(-1)    
+                    else:
+                        probs_seq = probs[start_idx : start_idx + block_len]
+                        seq_x0 = torch.multinomial(probs_seq, num_samples=1).squeeze(-1) 
+                        seq_x0_p = torch.gather(probs_seq, -1, seq_x0.unsqueeze(-1)).squeeze(-1)
+                    
                     current_block_tensor = torch.tensor(seq.intermediate_block_tokens, device=logits.device)
                     mask_index = (current_block_tensor == self.mask_token_id)
                     num_to_transfer = seq.num_transfer_tokens_per_step[seq.current_denoising_step]
@@ -160,20 +211,20 @@ class Scheduler:
                             transfer_index[first_mask_pos:end_pos] = True
                     
                     elif 'low_confidence_static' in seq.remasking_strategy:
-                        confidence = torch.where(mask_index, seq_x0_p, -np.inf)
-                        # For dynamic, add threshold logic here if desired
+                        confidence = torch.where(mask_index, seq_x0_p, torch.tensor(-np.inf, device=logits.device))
                         _, top_indices = torch.topk(confidence, num_to_transfer)
                         transfer_index[top_indices] = True
                     
                     elif 'low_confidence_dynamic' in seq.remasking_strategy:
-                        confidence = torch.where(mask_index, seq_x0_p, -np.inf)
+                        confidence = torch.where(mask_index, seq_x0_p, torch.tensor(-np.inf, device=logits.device))
                         transfer_index = torch.where(confidence > seq.dynamic_threshold, True, False)
                         if sum(transfer_index) < num_to_transfer:
                             _, top_indices = torch.topk(confidence, num_to_transfer)
                             transfer_index[top_indices] = True
                         num_to_transfer = transfer_index.sum().item() if transfer_index.sum().item() > 0 else num_to_transfer
+                    
                     elif 'entropy_bounded' in seq.remasking_strategy:
-                        block_probs = probs[start_idx : start_idx + block_len]
+                        block_probs = probs_seq if not self.consistent_sampling_params else probs[start_idx : start_idx + block_len]
                         P = block_probs[mask_index]
                         eps = 1e-12
                         entropies = -(P.clamp_min(eps) * (P.clamp_min(eps)).log()).sum(dim=-1)
@@ -182,32 +233,21 @@ class Scheduler:
                         k = torch.searchsorted(cumsum, torch.tensor(seq.eb_threshold, device=P.device), right=False).item()
                         if k == 0:
                             k = 1
-                        # print(k)
                         selected_token_indices = mask_index.nonzero(as_tuple=True)[0][order[:k]]
-                        # print(selected_token_indices)
                         transfer_index[selected_token_indices] = True
                         num_to_transfer = k
 
-                    # update
+                    # Update block
                     new_block_list = current_block_tensor.tolist()
                     accepted_tokens = seq_x0[transfer_index].tolist()
                     original_indices = transfer_index.nonzero(as_tuple=True)[0].tolist()
 
-
-
-
-
-                    # newly added
                     if seq.block_first_unmask_steps is None or len(seq.block_first_unmask_steps) != block_len:
                         seq.block_first_unmask_steps = [0] * block_len
                     first_time_global = seq.global_denoising_step + 1
                     for idx in original_indices:
                         if seq.block_first_unmask_steps[idx] == 0:
                             seq.block_first_unmask_steps[idx] = first_time_global
-
-
-
-                    
 
                     for idx, token in zip(original_indices, accepted_tokens):
                         new_block_list[idx] = token
@@ -216,21 +256,19 @@ class Scheduler:
                     seq.current_denoising_step += 1
                     seq.global_denoising_step += 1
                     
-                    # Check if block is fully denoised
                     is_fully_denoised = (self.mask_token_id not in seq.intermediate_block_tokens) or \
                                         (seq.current_denoising_step >= seq.denoising_steps)
 
                     if is_fully_denoised:
-                        # Block is done, commit it and check if generation is finished
                         seq.status = SequenceStatus.FINISHED if seq.is_finished else SequenceStatus.SAVING
                     seq.num_to_transfer = num_to_transfer
-                    
+                        
                 elif seq.status == SequenceStatus.SAVING:
                     # Check if in eval mode
                     if seq.eval_mode and seq.full_oracle_sentence is not None:
                         # Commit current block
                         seq.commit_block(seq.intermediate_block_tokens)
-                        seq.advance_to_next_block()  # Save block results
+                        seq.advance_to_next_block()
                         
                         # Check if there are more blocks to evaluate
                         remaining_tokens = len(seq.full_oracle_sentence) - seq.num_tokens
@@ -250,16 +288,9 @@ class Scheduler:
                             seq.start_new_block()
 
                 start_idx += seq.block_length
-                
-        # Filter out finished sequences from the running list
-        finished_seqs = [seq for seq in self.running if seq.is_finished]
-
-        # Store finished sequences temporarily so they can be accessed
-        # by the engine before deallocation
-        if not hasattr(self, '_finished_seqs_cache'):
-            self._finished_seqs_cache = []
-        self._finished_seqs_cache.extend(finished_seqs)
-
-        self.running = [seq for seq in self.running if not seq.is_finished]
-        for seq in finished_seqs:
-            self.block_manager.deallocate(seq)
+                    
+            # Filter out finished sequences from the running list
+            finished_seqs = [seq for seq in self.running if seq.is_finished]
+            self.running = [seq for seq in self.running if not seq.is_finished]
+            for seq in finished_seqs:
+                self.block_manager.deallocate(seq)
