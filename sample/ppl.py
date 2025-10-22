@@ -164,7 +164,7 @@ def main():
             f"\nProcessing batch {i // args.batch_size + 1}/{(len(sentences) + args.batch_size - 1) // args.batch_size}"
         )
 
-        results = llm.evaluate_perplexity(
+        results = llm.evaluate_perplexity_streaming(
             batch, block_length=args.block_length, use_tqdm=True
         )
         all_results.extend(results)
