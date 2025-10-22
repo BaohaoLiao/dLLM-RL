@@ -118,7 +118,7 @@ def main():
         help="Output file for results",
     )
     parser.add_argument(
-        "--streaming", store_action="store_true", help="Use streaming evaluation mode"
+        "--streaming", action="store_true", help="Use streaming evaluation mode"
     )
 
     args = parser.parse_args()
