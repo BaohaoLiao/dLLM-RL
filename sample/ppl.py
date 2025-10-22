@@ -168,6 +168,7 @@ def main():
         block_length=args.block_length,
         use_tqdm=True,
         streaming=args.streaming,
+        max_active=args.batch_size,
     )
 
     if len(results) == 0:
