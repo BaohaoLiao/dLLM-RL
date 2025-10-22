@@ -163,31 +163,22 @@ def main():
 
     # Evaluate perplexity in batches
     print("\nEvaluating perplexity...")
-    all_results = []
+    results = llm.evaluate_perplexity(
+        sentences,
+        block_length=args.block_length,
+        use_tqdm=True,
+        streaming=args.streaming,
+    )
 
-    for i in range(0, len(sentences), args.batch_size):
-        batch = sentences[i : i + args.batch_size]
-        print(
-            f"\nProcessing batch {i // args.batch_size + 1}/{(len(sentences) + args.batch_size - 1) // args.batch_size}"
-        )
-
-        results = llm.evaluate_perplexity(
-            batch,
-            block_length=args.block_length,
-            use_tqdm=True,
-            streaming=args.streaming,
-        )
-        all_results.extend(results)
-
-    if len(all_results) == 0:
+    if len(results) == 0:
         print("✗ No results generated")
         return
 
-    print(f"\n✓ Successfully evaluated {len(all_results)} sequences")
+    print(f"\n✓ Successfully evaluated {len(results)} sequences")
 
     # Compute statistics
     print("\nComputing statistics...")
-    stats = compute_statistics(all_results)
+    stats = compute_statistics(results)
 
     # Print results
     print("\n" + "=" * 60)
