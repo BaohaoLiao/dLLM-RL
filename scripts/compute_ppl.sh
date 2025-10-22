@@ -13,5 +13,5 @@ for block_len in 4; do
         --batch_size 16 \
         --max_samples 100 \
         --max_length 4096 \
-        --tensor_parallel_size 1 \
+        --tensor_parallel_size 1
 done

@@ -123,9 +123,14 @@ def main():
 
     # Load model
     print("\nLoading model...")
+
+    mask_token_id = -1
+    if "trado" in args.model_name_or_path.lower():
+        mask_token_id = 151669,
     llm = LLM(
         model=args.model_name_or_path,
         tensor_parallel_size=args.tensor_parallel_size,
+        mask_token_id=mask_token_id,
     )
     print(f"Model loaded. Mask token ID: {llm.config.mask_token_id}")
 
