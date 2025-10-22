@@ -111,8 +111,15 @@ def main():
     parser.add_argument(
         "--batch_size", type=int, default=32, help="Batch size for evaluation"
     )
-    parser.add_argument('--output_file', type=str, default='ppl_results.json',
-                        help='Output file for results')
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        default="ppl_results.json",
+        help="Output file for results",
+    )
+    parser.add_argument(
+        "--streaming", store_action="store_true", help="Use streaming evaluation mode"
+    )
 
     args = parser.parse_args()
 
@@ -130,7 +137,7 @@ def main():
 
     mask_token_id = -1
     if "trado" in args.model_name_or_path.lower():
-        mask_token_id = 151669,
+        mask_token_id = (151669,)
     llm = LLM(
         model=args.model_name_or_path,
         tensor_parallel_size=args.tensor_parallel_size,
@@ -166,7 +173,10 @@ def main():
         )
 
         results = llm.evaluate_perplexity(
-            batch, block_length=args.block_length, use_tqdm=True, streaming=True,
+            batch,
+            block_length=args.block_length,
+            use_tqdm=True,
+            streaming=args.streaming,
         )
         all_results.extend(results)
 
@@ -197,12 +207,12 @@ def main():
 
     # Save results
     output_data = {
-        'args': vars(args),
-        'statistics': stats,
+        "args": vars(args),
+        "statistics": stats,
     }
-    with open(args.output_file, 'w') as f:
+    with open(args.output_file, "w") as f:
         json.dump(output_data, f, indent=2)
-    
+
     print(f"\nResults saved to {args.output_file}")
 
 
