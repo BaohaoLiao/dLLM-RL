@@ -16,6 +16,5 @@ for block_len in 4; do
         --batch_size 16 \
         --max_samples 1 \
         --max_length 2048 \
-        --tensor_parallel_size 1 \
         --output_file ${SAVE_DIR}/blocklen_${block_len}.json
 done

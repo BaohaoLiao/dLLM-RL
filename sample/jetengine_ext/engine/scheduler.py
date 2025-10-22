@@ -253,6 +253,13 @@ class Scheduler:
                 
         # Filter out finished sequences from the running list
         finished_seqs = [seq for seq in self.running if seq.is_finished]
+
+        # Store finished sequences temporarily so they can be accessed
+        # by the engine before deallocation
+        if not hasattr(self, '_finished_seqs_cache'):
+            self._finished_seqs_cache = []
+        self._finished_seqs_cache.extend(finished_seqs)
+
         self.running = [seq for seq in self.running if not seq.is_finished]
         for seq in finished_seqs:
             self.block_manager.deallocate(seq)

@@ -166,7 +166,7 @@ def main():
         )
 
         results = llm.evaluate_perplexity(
-            batch, block_length=args.block_length, use_tqdm=True
+            batch, block_length=args.block_length, use_tqdm=True, streaming=True,
         )
         all_results.extend(results)
 
