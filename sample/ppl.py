@@ -2,7 +2,7 @@
 Perplexity evaluation script for block diffusion models.
 
 Usage:
-    python ppl.py --model_name_or_path /path/to/model --eval_dataset wikitext --block_length 4
+    python ppl.py --model_name_or_path /path/to/model --dataset_path test.json --block_length 4
 """
 
 import argparse
@@ -13,13 +13,13 @@ from jetengine_ext import LLM
 
 
 def load_dataset(
-    dataset_name: str, tokenizer, max_samples: int = None, max_length: int = 512
+    dataset_path: str, tokenizer, max_samples: int = None, max_length: int = 512
 ):
     """
     Load evaluation dataset and tokenize.
 
     Args:
-        dataset_name: Name of dataset ('wikitext', 'ptb', or path to text file)
+        dataset_path: path to a json file
         tokenizer: Tokenizer instance
         max_samples: Maximum number of samples to evaluate (None = all)
         max_length: Maximum sequence length
@@ -29,7 +29,8 @@ def load_dataset(
     """
     sequences = []
 
-    dataset = load_dataset(dataset_name, split="test")
+    dataset = load_dataset("json", data_files=dataset_path, split="train")
+
     for i, example in enumerate(dataset):
         if max_samples and i >= max_samples:
             break
@@ -43,7 +44,7 @@ def load_dataset(
                     tokens = tokens[:max_length]
                 sequences.append(tokens)
 
-    print(f"Loaded {len(sequences)} sequences from {dataset_name}")
+    print(f"Loaded {len(sequences)} sequences from {dataset_path}")
     return sequences
 
 
@@ -91,7 +92,7 @@ def main():
     )
 
     # Dataset arguments
-    parser.add_argument("--eval_dataset", type=str, required=True, help="Dataset name")
+    parser.add_argument("--dataset_path", type=str, required=True, help="Dataset path")
     parser.add_argument(
         "--max_samples",
         type=int,
@@ -116,7 +117,7 @@ def main():
     print("Block Diffusion Model Perplexity Evaluation")
     print("=" * 60)
     print(f"Model: {args.model_name_or_path}")
-    print(f"Dataset: {args.eval_dataset}")
+    print(f"Dataset: {args.dataset_path}")
     print(f"Block length: {args.block_length}")
     print(f"Max samples: {args.max_samples if args.max_samples else 'all'}")
     print("=" * 60)
@@ -137,7 +138,7 @@ def main():
     # Load dataset
     print("\nLoading dataset...")
     sentences = load_dataset(
-        args.eval_dataset,
+        args.dataset_path,
         llm.tokenizer,
         max_samples=args.max_samples,
         max_length=args.max_length,
