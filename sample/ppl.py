@@ -135,7 +135,7 @@ def main():
     print("\nLoading model...")
 
     mask_token_id = -1
-    if "trado" in args.model_name_or_path.lower():
+    if "trado" in args.model_name_or_path.lower() or "sdar" in args.model_name_or_path.lower():
         mask_token_id = (151669,)
     llm = LLM(
         model=args.model_name_or_path,
