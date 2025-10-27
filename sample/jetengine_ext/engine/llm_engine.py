@@ -4,6 +4,8 @@ from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 import torch.multiprocessing as mp
+import numpy as np
+
 # Added imports for profiling
 import torch
 from torch import nn
@@ -19,7 +21,6 @@ from jetengine_ext.utils.loader import load_from_hf_model
 
 
 class LLMEngine:
-
     def __init__(self, model, **kwargs):
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
@@ -34,10 +35,18 @@ class LLMEngine:
             self.ps.append(process)
             self.events.append(event)
         self.model_runner = ModelRunner(config, 0, self.events)
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            config.model, use_fast=True, trust_remote_code=True
+        )
         config.eos = self.tokenizer.eos_token_id
-        config.mask_token_id = self.tokenizer.mask_token_id if self.tokenizer.mask_token_id is not None else self.tokenizer.pad_token_id
-        assert config.mask_token_id is not None, "Model tokenizer must have a mask_token_id or pad_token_id"
+        config.mask_token_id = (
+            self.tokenizer.mask_token_id
+            if self.tokenizer.mask_token_id is not None
+            else self.tokenizer.pad_token_id
+        )
+        assert config.mask_token_id is not None, (
+            "Model tokenizer must have a mask_token_id or pad_token_id"
+        )
 
         self.config = config
         self.scheduler = Scheduler(config)
@@ -71,13 +80,17 @@ class LLMEngine:
                 mod._buffers[bname] = buf
 
             torch.cuda.empty_cache()
+
         if include_buffers:
             self.model_runner.model.to_empty(device=torch.device("meta"))
         else:
             offload_parameters_keep_buffers(self.model_runner.model)
 
-        print("Successfully cleaned old parameters (buffers kept)." if not include_buffers
-              else "Successfully cleaned old parameters and buffers.")
+        print(
+            "Successfully cleaned old parameters (buffers kept)."
+            if not include_buffers
+            else "Successfully cleaned old parameters and buffers."
+        )
 
     def reload_parameters(self, hf_model: nn.Module):
         load_from_hf_model(self.model_runner.model, hf_model=hf_model)
@@ -102,13 +115,13 @@ class LLMEngine:
     def step(self):
         scheduled_seqs, run_type = self.scheduler.schedule()
         if scheduled_seqs is None:
-            return [], 0 # Nothing to run
+            return [], 0  # Nothing to run
 
         logits = self.model_runner.call("run", scheduled_seqs, run_type)
         self.scheduler.postprocess(scheduled_seqs, logits, run_type)
-        
-        #finished_outputs = [(seq.seq_id, seq.completion_token_ids) for seq in scheduled_seqs if seq.is_finished]
-        
+
+        # finished_outputs = [(seq.seq_id, seq.completion_token_ids) for seq in scheduled_seqs if seq.is_finished]
+
         finished_outputs = [
             (seq.seq_id, seq.completion_token_ids, seq.first_unmask_steps)
             for seq in scheduled_seqs
@@ -116,14 +129,16 @@ class LLMEngine:
         ]
 
         # Throughput calculation needs to be adapted for block-wise generation
-        num_tokens = [self.scheduler.running[i].num_to_transfer if hasattr(self.scheduler.running[i], 'num_to_transfer') else 0 for i in range(len(self.scheduler.running))]
+        num_tokens = [
+            self.scheduler.running[i].num_to_transfer
+            if hasattr(self.scheduler.running[i], "num_to_transfer")
+            else 0
+            for i in range(len(self.scheduler.running))
+        ]
         return finished_outputs, sum(num_tokens)
 
     def is_finished(self):
         return self.scheduler.is_finished()
-
-
-
 
     def _clean_token_ids(self, token_ids):
         # Accept tensors, numpy ints, etc.
@@ -131,7 +146,7 @@ class LLMEngine:
             token_ids = list(token_ids)
         except Exception:
             token_ids = [token_ids]
-        
+
         vocab_size = getattr(self.tokenizer, "vocab_size", None)
         special_ids = set(getattr(self.tokenizer, "all_special_ids", []) or [])
         mask_id = getattr(self.config, "mask_token_id", None)
@@ -149,8 +164,6 @@ class LLMEngine:
         ids = self._clean_token_ids(token_ids)
         # skip_special_tokens can be True or False; doesn't affect the None issue
         return self.tokenizer.decode(ids, skip_special_tokens=False)
-    
-
 
     def generate(
         self,
@@ -172,7 +185,7 @@ class LLMEngine:
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
         outputs = {}
-        
+
         total_generated_tokens = 0
         start_time = perf_counter()
 
@@ -188,7 +201,8 @@ class LLMEngine:
                 profile_memory=True,
                 on_trace_ready=torch_profiler.tensorboard_trace_handler(trace_dir),
             )
-            if profile else nullcontext()
+            if profile
+            else nullcontext()
         )
 
         with prof_ctx as prof:
@@ -197,26 +211,29 @@ class LLMEngine:
                 if profile:
                     prof.step()
                 total_generated_tokens += num_processed
-                
+
                 throughput = total_generated_tokens / (perf_counter() - start_time)
                 if use_tqdm:
                     pbar.set_postfix({"Throughput": f"{int(throughput)} tok/s"})
 
-                #for seq_id, token_ids in output:
+                # for seq_id, token_ids in output:
                 #    outputs[seq_id] = token_ids
                 for seq_id, token_ids, unmask_times in output:
-                    outputs[seq_id] = {"token_ids": token_ids, "unmask_times": unmask_times}
+                    outputs[seq_id] = {
+                        "token_ids": token_ids,
+                        "unmask_times": unmask_times,
+                    }
                     if use_tqdm:
                         pbar.update(1)
 
-        #outputs = [outputs[seq_id] for seq_id in sorted(outputs)]
-        #outputs = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs]
+        # outputs = [outputs[seq_id] for seq_id in sorted(outputs)]
+        # outputs = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs]
         outputs = [outputs[seq_id] for seq_id in sorted(outputs)]
         outputs = [
             {
                 "text": self._safe_decode(item["token_ids"]),
                 "token_ids": self._clean_token_ids(item["token_ids"]),
-                "first_unmask_times": item["unmask_times"],   # 与 token_ids 等长
+                "first_unmask_times": item["unmask_times"],  # 与 token_ids 等长
             }
             for item in outputs
         ]
@@ -274,7 +291,8 @@ class LLMEngine:
                 profile_memory=True,
                 on_trace_ready=torch_profiler.tensorboard_trace_handler(trace_dir),
             )
-            if profile else nullcontext()
+            if profile
+            else nullcontext()
         )
 
         with prof_ctx as prof:
@@ -293,17 +311,22 @@ class LLMEngine:
                 total_generated_tokens += num_processed
 
                 if use_tqdm:
-                    throughput = total_generated_tokens / (perf_counter() - start_time + 1e-6)
+                    throughput = total_generated_tokens / (
+                        perf_counter() - start_time + 1e-6
+                    )
                     pbar.set_postfix({"Throughput": f"{int(throughput)} tok/s"})
                     pbar.update(len(output))
 
-                #for seq_id, token_ids in output:
+                # for seq_id, token_ids in output:
                 #    outputs[seq_id] = token_ids
                 for seq_id, token_ids, unmask_times in output:
-                    outputs[seq_id] = {"token_ids": token_ids, "unmask_times": unmask_times}
+                    outputs[seq_id] = {
+                        "token_ids": token_ids,
+                        "unmask_times": unmask_times,
+                    }
 
-        #outputs_list = [outputs[seq_id] for seq_id in sorted(outputs)]
-        #results = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs_list]
+        # outputs_list = [outputs[seq_id] for seq_id in sorted(outputs)]
+        # results = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs_list]
         outputs_list = [outputs[seq_id] for seq_id in sorted(outputs)]
         results = [
             {
@@ -316,4 +339,264 @@ class LLMEngine:
 
         if use_tqdm:
             pbar.close()
+        return results
+
+    def evaluate_perplexity(
+        self,
+        sentences: list[list[int]],
+        block_length: int = 4,
+        use_tqdm: bool = True,
+        streaming: bool = True,
+        max_active: int | None = None,
+    ) -> list[dict]:
+        """
+        Evaluate perplexity using oracle unmasking.
+        
+        Args:
+            sentences: List of token sequences to evaluate
+            block_length: Fixed block length for evaluation
+            use_tqdm: Show progress bar
+            streaming: If True, process multiple sentences in parallel (faster)
+            max_active: Maximum concurrent sequences (only for streaming mode)
+        
+        Returns:
+            List of dicts with: 'perplexity', 'nll', 'unmask_order', 'log_probs', 'block_ppls'
+        """
+        if streaming:
+            return self.evaluate_perplexity_streaming(
+                sentences=sentences,
+                block_length=block_length,
+                max_active=max_active,
+                use_tqdm=use_tqdm,
+            )
+        else:
+            # Sequential processing (original implementation)
+            return self._evaluate_perplexity_sequential(
+                sentences=sentences,
+                block_length=block_length,
+                use_tqdm=use_tqdm,
+            )
+        
+    def evaluate_perplexity_streaming(
+        self,
+        sentences: list[list[int]],
+        block_length: int = 4,
+        max_active: int | None = None,
+        use_tqdm: bool = True,
+    ) -> list[dict]:
+        """
+        Evaluate perplexity with parallel processing of multiple sentences.
+        """
+        total = len(sentences)
+        
+        if max_active is None:
+            max_active = getattr(self.scheduler, "max_num_seqs", 32)
+        
+        if use_tqdm:
+            pbar = tqdm(total=total, desc="Evaluating PPL (streaming)")
+        
+        # Track results by sequence ID
+        results_dict: dict[int, dict] = {}
+        seq_id_to_seq: dict[int, Sequence] = {}
+        pending_idx = 0
+        
+        # Helper function to create evaluation sequence
+        def create_eval_sequence(sentence: list[int], sent_idx: int):
+            num_blocks = (len(sentence) + block_length - 1) // block_length
+            padded_length = num_blocks * block_length
+            
+            if len(sentence) < padded_length:
+                sentence_padded = sentence + [self.tokenizer.pad_token_id] * (padded_length - len(sentence))
+            else:
+                sentence_padded = sentence
+            
+            sampling_params = SamplingParams(
+                block_length=block_length,
+                denoising_steps=block_length,
+                remasking_strategy='low_confidence_static',
+                eval_mode=True,
+                ignore_eos=True,
+                max_tokens=len(sentence_padded),
+            )
+            
+            prefill_tokens = []
+            seq = Sequence(prefill_tokens, self.config.mask_token_id, sampling_params)
+            seq.eos_token_id = self.tokenizer.eos_token_id
+            seq.set_full_oracle_sentence(sentence_padded)
+            
+            # Store metadata using eval_ prefix to avoid conflicts
+            seq.eval_original_sentence = sentence
+            seq.eval_original_index = sent_idx
+            seq.eval_num_blocks = num_blocks
+            
+            return seq
+        
+        # Prime initial batch
+        initial = min(max_active, total)
+        for i in range(initial):
+            seq = create_eval_sequence(sentences[i], i)
+            seq_id_to_seq[seq.seq_id] = seq
+            self.scheduler.add(seq)
+        pending_idx = initial
+        
+        # Process all sequences
+        while not self.is_finished() or pending_idx < total:
+            # Top up to capacity
+            running = getattr(self.scheduler, "running", [])
+            deficit = max_active - len(running)
+            
+            while deficit > 0 and pending_idx < total:
+                seq = create_eval_sequence(sentences[pending_idx], pending_idx)
+                seq_id_to_seq[seq.seq_id] = seq
+                self.scheduler.add(seq)
+                pending_idx += 1
+                deficit -= 1
+            
+            # Run one step
+            finished_outputs, _ = self.step()
+            
+            # Process finished sequences
+            for seq_id, _, _ in finished_outputs:
+                if seq_id not in seq_id_to_seq:
+                    continue
+                
+                seq = seq_id_to_seq[seq_id]
+                original_sentence = seq.eval_original_sentence
+                
+                # Extract results
+                valid_log_probs = seq.step_log_probs[:len(original_sentence)]
+                valid_unmask_order = seq.step_unmask_positions[:len(original_sentence)]
+                
+                if len(valid_log_probs) == 0:
+                    print(f"Warning: No log probs for sentence {original_sentence}")
+                    nll = 0.0
+                    ppl = 1.0
+                else:
+                    nll = -np.mean(valid_log_probs)
+                    ppl = np.exp(nll)
+                
+                # Compute per-block PPL
+                block_ppls = []
+                for i in range(seq.eval_num_blocks):
+                    start = i * block_length
+                    end = min(start + block_length, len(original_sentence))
+                    block_log_probs = seq.step_log_probs[start:end]
+                    if block_log_probs:
+                        block_nll = -np.mean(block_log_probs)
+                        block_ppls.append(np.exp(block_nll))
+                
+                # Store results
+                original_idx = seq.eval_original_index
+                results_dict[original_idx] = {
+                    'tokens': original_sentence,
+                    'perplexity': ppl,
+                    'nll': nll,
+                    'unmask_order': valid_unmask_order,
+                    'log_probs': valid_log_probs,
+                    'block_ppls': block_ppls,
+                    'num_blocks': seq.eval_num_blocks,
+                }
+                
+                # Clean up reference
+                del seq_id_to_seq[seq_id]
+                
+                if use_tqdm:
+                    pbar.update(1)
+        
+        if use_tqdm:
+            pbar.close()
+        
+        # Return results in original order
+        results = [results_dict[i] for i in range(total)]
+        return results
+
+    def _evaluate_perplexity_sequential(
+        self,
+        sentences: list[list[int]],
+        block_length: int = 4,
+        use_tqdm: bool = True,
+    ) -> list[dict]:
+        """
+        Sequential perplexity evaluation (one sentence at a time).
+        """
+        results = []
+        
+        if use_tqdm:
+            pbar = tqdm(total=len(sentences), desc="Evaluating PPL (sequential)")
+        
+        for sentence in sentences:
+            # Determine number of blocks
+            num_blocks = (len(sentence) + block_length - 1) // block_length
+            
+            # Pad sentence to multiple of block_length if needed
+            padded_length = num_blocks * block_length
+            if len(sentence) < padded_length:
+                sentence_padded = sentence + [self.tokenizer.pad_token_id] * (padded_length - len(sentence))
+            else:
+                sentence_padded = sentence
+            
+            # Create sampling params for evaluation
+            sampling_params = SamplingParams(
+                block_length=block_length,
+                denoising_steps=block_length,
+                remasking_strategy='low_confidence_static',
+                eval_mode=True,
+                ignore_eos=True,
+                max_tokens=len(sentence_padded),
+            )
+            
+            # Create sequence (no prefill)
+            prefill_tokens = []
+            seq = Sequence(prefill_tokens, self.config.mask_token_id, sampling_params)
+            seq.eos_token_id = self.tokenizer.eos_token_id
+            seq.set_full_oracle_sentence(sentence_padded)
+            
+            # Store metadata
+            seq.eval_original_sentence = sentence
+            seq.eval_num_blocks = num_blocks
+            
+            self.scheduler.add(seq)
+            
+            # Run evaluation for this sentence
+            while not self.is_finished():
+                self.step()
+            
+            # Extract results
+            valid_log_probs = seq.step_log_probs[:len(sentence)]
+            valid_unmask_order = seq.step_unmask_positions[:len(sentence)]
+            
+            if len(valid_log_probs) == 0:
+                print(f"Warning: No log probs for sentence {sentence}")
+                nll = 0.0
+                ppl = 1.0
+            else:
+                nll = -np.mean(valid_log_probs)
+                ppl = np.exp(nll)
+            
+            # Compute per-block PPL
+            block_ppls = []
+            for i in range(num_blocks):
+                start = i * block_length
+                end = min(start + block_length, len(sentence))
+                block_log_probs = seq.step_log_probs[start:end]
+                if block_log_probs:
+                    block_nll = -np.mean(block_log_probs)
+                    block_ppls.append(np.exp(block_nll))
+            
+            results.append({
+                'tokens': sentence,
+                'perplexity': ppl,
+                'nll': nll,
+                'unmask_order': valid_unmask_order,
+                'log_probs': valid_log_probs,
+                'block_ppls': block_ppls,
+                'num_blocks': num_blocks,
+            })
+            
+            if use_tqdm:
+                pbar.update(1)
+        
+        if use_tqdm:
+            pbar.close()
+        
         return results
